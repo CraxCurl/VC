@@ -14,6 +14,7 @@ import {
   applyBandwidthConstraints,
   createAudioLevelMonitor,
   getMediaConstraints,
+  ICE_SERVERS,
 } from '@/lib/webrtc-utils';
 import {
   playJoinSound,
@@ -75,12 +76,59 @@ export function useWebRTC({
   const callRef = useRef<MediaConnection | null>(null);
   const dataConnRef = useRef<DataConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const pendingIncomingCallRef = useRef<MediaConnection | null>(null);
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
-  const prevBytesRef = useRef<{ bytes: number; timestamp: number }>({ bytes: 0, timestamp: Date.now() });
+  const prevBytesRef = useRef<{ bytes: number; timestamp: number }>({
+    bytes: 0,
+    timestamp: Date.now(),
+  });
 
-  // Keep ref synchronized
+  // Dedicated Audio Element Ref for flawless remote audio playback
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Initialize hidden background audio element on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const audio = new Audio();
+      audio.autoplay = true;
+      (audio as any).playsInline = true;
+      remoteAudioRef.current = audio;
+
+      return () => {
+        audio.srcObject = null;
+        audio.pause();
+      };
+    }
+  }, []);
+
+  // Synchronize remote audio playback whenever remoteStream changes
+  useEffect(() => {
+    if (remoteAudioRef.current) {
+      if (remoteStream) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.play().catch((err) => {
+          console.log('Remote audio playback deferred:', err);
+        });
+      } else {
+        remoteAudioRef.current.srcObject = null;
+      }
+    }
+  }, [remoteStream]);
+
+  // Keep local stream ref synchronized
   useEffect(() => {
     localStreamRef.current = localStream;
+    // If an incoming call was received before stream was ready, answer it now
+    if (localStream && pendingIncomingCallRef.current) {
+      const call = pendingIncomingCallRef.current;
+      pendingIncomingCallRef.current = null;
+      try {
+        call.answer(localStream);
+        setupMediaCall(call);
+      } catch (e) {
+        console.warn('Error answering pending call:', e);
+      }
+    }
   }, [localStream]);
 
   // Audio level monitors
@@ -105,7 +153,11 @@ export function useWebRTC({
   // Broadcast state to remote peer
   const sendData = useCallback((payload: PeerDataPayload) => {
     if (dataConnRef.current && dataConnRef.current.open) {
-      dataConnRef.current.send(payload);
+      try {
+        dataConnRef.current.send(payload);
+      } catch (e) {
+        console.warn('Failed to send data payload:', e);
+      }
     }
   }, []);
 
@@ -126,153 +178,190 @@ export function useWebRTC({
   );
 
   // Initialize Local Media Stream
-  const initLocalStream = useCallback(async (preset: QualityPreset = initialPreset, aDevId?: string, vDevId?: string) => {
-    try {
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-
-      let stream: MediaStream | null = null;
+  const initLocalStream = useCallback(
+    async (preset: QualityPreset = initialPreset, aDevId?: string, vDevId?: string) => {
       try {
-        const constraints = getMediaConstraints(preset, aDevId || selectedAudioDevice, vDevId || selectedVideoDevice);
-        stream = await navigator.mediaDevices.getUserMedia(constraints);
-      } catch (e) {
-        console.warn('First-choice getUserMedia failed, attempting basic constraints:', e);
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            audio: true,
-            video: { facingMode: 'user' },
-          });
-        } catch (videoErr) {
-          console.warn('Video acquisition failed, falling back to audio-only:', videoErr);
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          setIsVideoMuted(true);
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach((track) => track.stop());
         }
-      }
 
-      if (!stream) {
-        setConnectionError('Could not access camera or microphone. Please check browser permissions.');
+        let stream: MediaStream | null = null;
+        try {
+          const constraints = getMediaConstraints(
+            preset,
+            aDevId || selectedAudioDevice,
+            vDevId || selectedVideoDevice
+          );
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (e) {
+          console.warn('First-choice getUserMedia failed, attempting standard constraints:', e);
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+              video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 360 } },
+            });
+          } catch (videoErr) {
+            console.warn('Video acquisition failed, falling back to voice only:', videoErr);
+            stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            setIsVideoMuted(true);
+          }
+        }
+
+        if (!stream) {
+          setConnectionError('Could not access camera or microphone. Please check browser permissions.');
+          return null;
+        }
+
+        // Apply initial mute states
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = !initialAudioMuted;
+        });
+        stream.getVideoTracks().forEach((t) => {
+          t.enabled = !initialVideoMuted;
+        });
+
+        setLocalStream(stream);
+        localStreamRef.current = stream;
+        return stream;
+      } catch (err: any) {
+        console.error('Fatal media error:', err);
+        setConnectionError('Could not access media devices. Please grant camera and microphone permissions.');
         return null;
       }
+    },
+    [initialAudioMuted, initialVideoMuted, selectedAudioDevice, selectedVideoDevice, initialPreset]
+  );
 
-      // Apply initial mute states
-      stream.getAudioTracks().forEach((t) => {
-        t.enabled = !initialAudioMuted;
-      });
-      stream.getVideoTracks().forEach((t) => {
-        t.enabled = !initialVideoMuted;
-      });
+  // Setup Media Call Listeners
+  const setupMediaCall = useCallback(
+    (call: MediaConnection) => {
+      callRef.current = call;
 
-      setLocalStream(stream);
-      return stream;
-    } catch (err: any) {
-      console.error('Fatal media error:', err);
-      setConnectionError('Could not access media devices. Please grant camera and microphone permissions.');
-      return null;
-    }
-  }, [initialAudioMuted, initialVideoMuted, selectedAudioDevice, selectedVideoDevice, initialPreset]);
+      const handleStream = (rStream: MediaStream) => {
+        setRemoteStream(rStream);
+        setIsConnected(true);
+        setRemotePeerId(call.peer);
+        playJoinSound();
+        if (onRemoteJoined) onRemoteJoined();
 
-  // Setup Data Connection Listeners
-  const setupDataConnection = useCallback((conn: DataConnection) => {
-    dataConnRef.current = conn;
-
-    conn.on('open', () => {
-      setIsConnected(true);
-      broadcastLocalState();
-    });
-
-    conn.on('data', (data: any) => {
-      const msg = data as PeerDataPayload;
-      if (!msg || !msg.type) return;
-
-      if (msg.type === 'chat') {
-        const chatMsg: ChatMessage = {
-          ...msg.payload,
-          isSelf: false,
-        };
-        setChatMessages((prev) => [...prev, chatMsg]);
-        playMessageSound();
-      } else if (msg.type === 'reaction') {
-        if (onReactionReceived && msg.payload?.emoji) {
-          onReactionReceived(msg.payload.emoji);
+        if (call.peerConnection) {
+          applyBandwidthConstraints(call.peerConnection, qualityPreset);
         }
-      } else if (msg.type === 'state-sync') {
-        setRemotePeerState(msg.payload);
-      } else if (msg.type === 'leave') {
+      };
+
+      call.on('stream', handleStream);
+
+      // Handle stream track additions dynamically
+      if (call.peerConnection) {
+        call.peerConnection.ontrack = (event) => {
+          if (event.streams && event.streams[0]) {
+            handleStream(event.streams[0]);
+          }
+        };
+      }
+
+      call.on('close', () => {
         setRemoteStream(null);
         setRemotePeerId(null);
         setRemotePeerState(null);
         setIsConnected(false);
         playLeaveSound();
         if (onRemoteLeft) onRemoteLeft();
-      }
-    });
+      });
 
-    conn.on('close', () => {
-      setRemoteStream(null);
-      setRemotePeerId(null);
-      setRemotePeerState(null);
-      setIsConnected(false);
-      playLeaveSound();
-      if (onRemoteLeft) onRemoteLeft();
-    });
-  }, [broadcastLocalState, onReactionReceived, onRemoteLeft]);
+      call.on('error', (err) => {
+        console.error('Media Call error:', err);
+      });
+    },
+    [qualityPreset, onRemoteJoined, onRemoteLeft]
+  );
 
-  // Setup Media Call Listeners
-  const setupMediaCall = useCallback((call: MediaConnection) => {
-    callRef.current = call;
+  // Setup Data Connection Listeners
+  const setupDataConnection = useCallback(
+    (conn: DataConnection) => {
+      dataConnRef.current = conn;
 
-    call.on('stream', (rStream) => {
-      setRemoteStream(rStream);
-      setIsConnected(true);
-      setRemotePeerId(call.peer);
-      playJoinSound();
-      if (onRemoteJoined) onRemoteJoined();
+      conn.on('open', () => {
+        setIsConnected(true);
+        setRemotePeerId(conn.peer);
+        broadcastLocalState();
 
-      if (call.peerConnection) {
-        applyBandwidthConstraints(call.peerConnection, qualityPreset);
-      }
-    });
+        // Send handshake
+        conn.send({
+          type: 'chat',
+          payload: {
+            id: `sys-${Date.now()}`,
+            senderId: 'system',
+            senderName: 'System',
+            text: `${userName} connected.`,
+            timestamp: Date.now(),
+            isSelf: false,
+          },
+        });
 
-    call.on('close', () => {
-      setRemoteStream(null);
-      setRemotePeerId(null);
-      setRemotePeerState(null);
-      setIsConnected(false);
-      playLeaveSound();
-      if (onRemoteLeft) onRemoteLeft();
-    });
+        // Trigger media call if not yet established
+        if (peerRef.current && localStreamRef.current && (!callRef.current || !callRef.current.open)) {
+          try {
+            const mediaCall = peerRef.current.call(conn.peer, localStreamRef.current);
+            setupMediaCall(mediaCall);
+          } catch (err) {
+            console.warn('Call on data open attempt:', err);
+          }
+        }
+      });
 
-    call.on('error', (err) => {
-      console.error('Call error:', err);
-    });
-  }, [qualityPreset, onRemoteJoined, onRemoteLeft]);
+      conn.on('data', (data: any) => {
+        const msg = data as PeerDataPayload;
+        if (!msg || !msg.type) return;
 
-  // Connect to target Peer ID
-  const connectToPeer = useCallback((targetPeerId: string) => {
-    if (!peerRef.current || !localStreamRef.current) return;
-    if (targetPeerId === peerRef.current.id) return;
+        if (msg.type === 'chat') {
+          const chatMsg: ChatMessage = {
+            ...msg.payload,
+            isSelf: false,
+          };
+          setChatMessages((prev) => [...prev, chatMsg]);
+          playMessageSound();
+        } else if (msg.type === 'reaction') {
+          if (onReactionReceived && msg.payload?.emoji) {
+            onReactionReceived(msg.payload.emoji);
+          }
+        } else if (msg.type === 'state-sync') {
+          setRemotePeerState(msg.payload);
+        } else if (msg.type === 'leave') {
+          setRemoteStream(null);
+          setRemotePeerId(null);
+          setRemotePeerState(null);
+          setIsConnected(false);
+          playLeaveSound();
+          if (onRemoteLeft) onRemoteLeft();
+        }
+      });
 
-    try {
-      const dataConn = peerRef.current.connect(targetPeerId);
-      setupDataConnection(dataConn);
+      conn.on('close', () => {
+        setRemoteStream(null);
+        setRemotePeerId(null);
+        setRemotePeerState(null);
+        setIsConnected(false);
+        playLeaveSound();
+        if (onRemoteLeft) onRemoteLeft();
+      });
 
-      const mediaCall = peerRef.current.call(targetPeerId, localStreamRef.current);
-      setupMediaCall(mediaCall);
-    } catch (err) {
-      console.warn('Connect to peer attempt:', err);
-    }
-  }, [setupDataConnection, setupMediaCall]);
+      conn.on('error', (err) => {
+        console.warn('Data connection error:', err);
+      });
+    },
+    [userName, broadcastLocalState, onReactionReceived, onRemoteLeft, setupMediaCall]
+  );
 
   // Initialize WebRTC & Deterministic 1-on-1 Room Peer Matching
   useEffect(() => {
     let peerInstance: Peer | null = null;
     let isSubscribed = true;
-    let connectInterval: NodeJS.Timeout | null = null;
+    let heartbeatInterval: NodeJS.Timeout | null = null;
 
     const cleanRoomCode = roomId.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const hostPeerId = `meet-${cleanRoomCode}-host`;
-    const guestPeerId = `meet-${cleanRoomCode}-guest`;
+    const slotA = `meet-${cleanRoomCode}-a`;
+    const slotB = `meet-${cleanRoomCode}-b`;
 
     async function initPeerSession() {
       setIsConnecting(true);
@@ -284,84 +373,103 @@ export function useWebRTC({
 
       const peerConfig = {
         config: {
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-            { urls: 'stun:stun2.l.google.com:19302' },
-            { urls: 'stun:global.stun.twilio.com:3478' },
-          ],
+          iceServers: ICE_SERVERS,
+          iceCandidatePoolSize: 10,
         },
       };
 
-      // Try Host ID first
-      let currentPeer = new Peer(hostPeerId, peerConfig);
-      peerInstance = currentPeer;
-      peerRef.current = currentPeer;
+      const startPeerInSlot = (mySlot: string, targetSlot: string) => {
+        if (!isSubscribed) return;
 
-      const attachHandlers = (peer: Peer, isHost: boolean) => {
+        const peer = new Peer(mySlot, peerConfig);
+        peerInstance = peer;
+        peerRef.current = peer;
+
         peer.on('open', (id) => {
           if (!isSubscribed) return;
           setPeerId(id);
           setIsConnecting(false);
 
-          if (!isHost) {
-            // As guest, connect to host immediately
-            if (stream) {
-              const dataConn = peer.connect(hostPeerId);
-              setupDataConnection(dataConn);
+          // Initiate handshake connect to the other slot
+          const tryConnectTarget = () => {
+            if (!isSubscribed || !peerRef.current || peerRef.current.destroyed) return;
+            const currentStream = localStreamRef.current || stream;
 
-              const mediaCall = peer.call(hostPeerId, stream);
-              setupMediaCall(mediaCall);
+            // Connect Data
+            if (!dataConnRef.current || !dataConnRef.current.open) {
+              try {
+                const dataConn = peer.connect(targetSlot, { reliable: true });
+                setupDataConnection(dataConn);
+              } catch (e) {}
             }
-          } else {
-            // As host, also attempt periodic handshake if guest joins
-            connectInterval = setInterval(() => {
-              if (!callRef.current && peerRef.current && stream) {
-                // Host ping to guest
-                try {
-                  const dataConn = peer.connect(guestPeerId);
-                  setupDataConnection(dataConn);
-                } catch (e) {}
-              }
-            }, 3000);
-          }
+
+            // Connect Media Call
+            if (currentStream && (!callRef.current || !callRef.current.open)) {
+              try {
+                const mediaCall = peer.call(targetSlot, currentStream);
+                setupMediaCall(mediaCall);
+              } catch (e) {}
+            }
+          };
+
+          // Try immediately
+          tryConnectTarget();
+
+          // And heartbeat retry until connected
+          heartbeatInterval = setInterval(() => {
+            if (!callRef.current?.open || !dataConnRef.current?.open) {
+              tryConnectTarget();
+            }
+          }, 2500);
         });
 
         peer.on('connection', (conn) => {
+          if (!isSubscribed) return;
           setupDataConnection(conn);
         });
 
         peer.on('call', (incomingCall) => {
-          if (localStreamRef.current) {
-            incomingCall.answer(localStreamRef.current);
+          if (!isSubscribed) return;
+          const currentStream = localStreamRef.current || stream;
+          if (currentStream) {
+            incomingCall.answer(currentStream);
             setupMediaCall(incomingCall);
+          } else {
+            // Queue pending call
+            pendingIncomingCallRef.current = incomingCall;
           }
         });
 
         peer.on('error', (err: any) => {
-          if (err.type === 'unavailable-id' && isHost) {
-            // Host is taken! We are the Guest. Connect as Guest ID.
+          if (!isSubscribed) return;
+
+          if (err.type === 'unavailable-id') {
+            // My slot is taken! Switch to the other slot
             peer.destroy();
-            const guestPeer = new Peer(guestPeerId, peerConfig);
-            peerInstance = guestPeer;
-            peerRef.current = guestPeer;
-            attachHandlers(guestPeer, false);
+            if (mySlot === slotA) {
+              startPeerInSlot(slotB, slotA);
+            } else {
+              // Both standard slots taken, generate fallback guest slot
+              const fallbackSlot = `meet-${cleanRoomCode}-g-${Math.random().toString(36).substring(2, 6)}`;
+              startPeerInSlot(fallbackSlot, slotA);
+            }
           } else if (err.type === 'peer-unavailable') {
-            // Remote peer not online yet, waiting in lobby
+            // Target peer not online yet, will retry via heartbeat
           } else {
-            console.warn('PeerJS notice:', err);
+            console.warn('PeerJS notice:', err?.type || err);
           }
         });
       };
 
-      attachHandlers(currentPeer, true);
+      // Start by attempting slot A
+      startPeerInSlot(slotA, slotB);
     }
 
     initPeerSession();
 
     return () => {
       isSubscribed = false;
-      if (connectInterval) clearInterval(connectInterval);
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => track.stop());
       }
@@ -401,10 +509,11 @@ export function useWebRTC({
 
         const now = Date.now();
         const timeDiffSeconds = (now - prevBytesRef.current.timestamp) / 1000;
-        const bytesDiff = (bytesReceived + bytesSent) - prevBytesRef.current.bytes;
+        const bytesDiff = bytesReceived + bytesSent - prevBytesRef.current.bytes;
         prevBytesRef.current = { bytes: bytesReceived + bytesSent, timestamp: now };
 
-        const currentKbps = timeDiffSeconds > 0 ? Math.round((bytesDiff * 8) / 1000 / timeDiffSeconds) : 0;
+        const currentKbps =
+          timeDiffSeconds > 0 ? Math.round(((bytesDiff * 8) / 1000) / timeDiffSeconds) : 0;
         const totalPackets = packetsReceived + packetsLost;
         const lossPercent = totalPackets > 0 ? Math.round((packetsLost / totalPackets) * 100) : 0;
 
@@ -476,7 +585,7 @@ export function useWebRTC({
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             cursor: 'always',
-            frameRate: qualityPreset === 'eco' ? 15 : 30,
+            frameRate: qualityPreset === 'eco' ? 15 : 24,
           } as any,
           audio: true,
         });
@@ -534,7 +643,6 @@ export function useWebRTC({
 
       setChatMessages((prev) => [...prev, msg]);
       sendData({ type: 'chat', payload: msg });
-      playMessageSound();
     },
     [peerId, userName, sendData]
   );
@@ -550,37 +658,37 @@ export function useWebRTC({
   // Controls: Leave Call
   const leaveCall = useCallback(() => {
     sendData({ type: 'leave', payload: {} });
-    if (callRef.current) callRef.current.close();
-    if (dataConnRef.current) dataConnRef.current.close();
+    if (callRef.current) {
+      callRef.current.close();
+      callRef.current = null;
+    }
+    if (dataConnRef.current) {
+      dataConnRef.current.close();
+      dataConnRef.current = null;
+    }
+    if (peerRef.current) {
+      peerRef.current.destroy();
+      peerRef.current = null;
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
     }
-    if (screenTrackRef.current) {
-      screenTrackRef.current.stop();
-    }
-    setIsConnected(false);
+    setLocalStream(null);
     setRemoteStream(null);
-    setRemotePeerId(null);
-    setRemotePeerState(null);
+    setIsConnected(false);
   }, [sendData]);
 
   return {
     localStream,
     remoteStream,
-    selectedAudioDevice,
-    selectedVideoDevice,
-    setSelectedAudioDevice,
-    setSelectedVideoDevice,
-    initLocalStream,
-
     peerId,
     remotePeerId,
     remotePeerState,
+    remoteAudioLevel,
     isConnected,
     isConnecting,
     connectionError,
-    connectToPeer,
-
     isAudioMuted,
     isVideoMuted,
     isScreenSharing,
@@ -590,14 +698,15 @@ export function useWebRTC({
     toggleScreenShare,
     changeQualityPreset,
     leaveCall,
-
-    localAudioLevel,
     isLocalSpeaking,
-    remoteAudioLevel,
-
+    localAudioLevel,
     chatMessages,
     sendChatMessage,
     sendReaction,
     networkStats,
+    selectedAudioDevice,
+    selectedVideoDevice,
+    setSelectedAudioDevice,
+    setSelectedVideoDevice,
   };
 }

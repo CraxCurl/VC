@@ -1,5 +1,35 @@
 import { QUALITY_PRESETS, QualityPreset } from '@/types/meeting';
 
+export const ICE_SERVERS: RTCIceServer[] = [
+  // Google Public STUN
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  // Cloudflare Public STUN
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  // Twilio Public STUN
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  // OpenRelay Public STUN & TURN fallback (for Symmetric NAT / mobile carrier networks)
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
 export function generateRoomId(): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   const segment = (len: number) => {
@@ -25,11 +55,14 @@ export function getMediaConstraints(
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
+        channelCount: 1, // Mono audio cuts voice data consumption in half
+        sampleRate: 24000, // Voice optimized sample rate
       }
     : {
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
+        channelCount: 1,
       };
 
   if (preset === 'audio-only') {
@@ -40,9 +73,9 @@ export function getMediaConstraints(
   }
 
   const videoConstraint: MediaTrackConstraints = {
-    width: { ideal: config.width || 640 },
-    height: { ideal: config.height || 480 },
-    frameRate: { ideal: config.frameRate || 24 },
+    width: { ideal: config.width || 480 },
+    height: { ideal: config.height || 360 },
+    frameRate: { ideal: config.frameRate || 15 },
     facingMode: 'user',
     ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
   };
@@ -75,12 +108,13 @@ export async function applyBandwidthConstraints(
         }
 
         if (preset === 'audio-only') {
-          // Pause/degrade video encoding
           parameters.encodings[0].active = false;
         } else {
           parameters.encodings[0].active = true;
           parameters.encodings[0].maxBitrate = config.videoBitrateKbps * 1000;
           parameters.encodings[0].maxFramerate = config.frameRate;
+          parameters.degradationPreference = 'maintain-framerate'; // Smooth video even when bandwidth fluctuates
+
           if (preset === 'eco') {
             parameters.encodings[0].scaleResolutionDownBy = 2;
           } else {
@@ -119,7 +153,9 @@ export function createAudioLevelMonitor(
     const audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack) return () => {};
 
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextClass) return () => {};
 
     audioCtx = new AudioContextClass();
@@ -143,7 +179,7 @@ export function createAudioLevelMonitor(
       }
       const average = sum / bufferLength;
       const normalized = Math.min(100, Math.round((average / 128) * 100));
-      const isSpeaking = normalized > 12 && audioTrack.enabled;
+      const isSpeaking = normalized > 10 && audioTrack.enabled;
 
       onLevelChange(normalized, isSpeaking);
       animFrameId = requestAnimationFrame(checkLevel);
