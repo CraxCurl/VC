@@ -132,8 +132,28 @@ export function useWebRTC({
         localStreamRef.current.getTracks().forEach((track) => track.stop());
       }
 
-      const constraints = getMediaConstraints(preset, aDevId || selectedAudioDevice, vDevId || selectedVideoDevice);
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      let stream: MediaStream | null = null;
+      try {
+        const constraints = getMediaConstraints(preset, aDevId || selectedAudioDevice, vDevId || selectedVideoDevice);
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (e) {
+        console.warn('First-choice getUserMedia failed, attempting basic constraints:', e);
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: { facingMode: 'user' },
+          });
+        } catch (videoErr) {
+          console.warn('Video acquisition failed, falling back to audio-only:', videoErr);
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          setIsVideoMuted(true);
+        }
+      }
+
+      if (!stream) {
+        setConnectionError('Could not access camera or microphone. Please check browser permissions.');
+        return null;
+      }
 
       // Apply initial mute states
       stream.getAudioTracks().forEach((t) => {
@@ -146,15 +166,9 @@ export function useWebRTC({
       setLocalStream(stream);
       return stream;
     } catch (err: any) {
-      console.warn('Fallback to standard getUserMedia:', err);
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        setLocalStream(stream);
-        return stream;
-      } catch (audioErr) {
-        setConnectionError('Could not access camera or microphone. Please check browser permissions.');
-        return null;
-      }
+      console.error('Fatal media error:', err);
+      setConnectionError('Could not access media devices. Please grant camera and microphone permissions.');
+      return null;
     }
   }, [initialAudioMuted, initialVideoMuted, selectedAudioDevice, selectedVideoDevice, initialPreset]);
 

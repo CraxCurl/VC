@@ -40,9 +40,10 @@ export function getMediaConstraints(
   }
 
   const videoConstraint: MediaTrackConstraints = {
-    width: { ideal: config.width, max: config.width },
-    height: { ideal: config.height, max: config.height },
-    frameRate: { ideal: config.frameRate, max: config.frameRate },
+    width: { ideal: config.width || 640 },
+    height: { ideal: config.height || 480 },
+    frameRate: { ideal: config.frameRate || 24 },
+    facingMode: 'user',
     ...(videoDeviceId ? { deviceId: { exact: videoDeviceId } } : {}),
   };
 

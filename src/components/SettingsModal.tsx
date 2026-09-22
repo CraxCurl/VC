@@ -59,12 +59,12 @@ export function SettingsModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150">
-      <div className="bg-[#202124] border border-[#3c4043] w-full max-w-xl rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150">
+      <div className="bg-[#202124] border border-[#3c4043] w-full max-w-xl max-h-[90dvh] rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#3c4043]">
-          <h2 className="text-white font-medium text-lg flex items-center gap-2">
-            <Sparkles className="w-5 h-5 text-[#8ab4f8]" /> Call Settings & Data Saver
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-[#3c4043]">
+          <h2 className="text-white font-medium text-base sm:text-lg flex items-center gap-2">
+            <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-[#8ab4f8]" /> Call Settings & Data Saver
           </h2>
           <button
             onClick={onClose}
@@ -75,41 +75,41 @@ export function SettingsModal({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-[#3c4043] bg-[#1a1a1c] px-6">
+        <div className="flex border-b border-[#3c4043] bg-[#1a1a1c] px-3 sm:px-6 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setTab('bandwidth')}
-            className={`py-3 px-4 text-sm font-medium border-b-2 flex items-center gap-2 transition-colors ${
+            className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0 ${
               tab === 'bandwidth'
                 ? 'border-[#8ab4f8] text-[#8ab4f8]'
                 : 'border-transparent text-[#9aa0a6] hover:text-white'
             }`}
           >
-            <Zap className="w-4 h-4" /> Data Saver & Quality
+            <Zap className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Data Saver
           </button>
           <button
             onClick={() => setTab('devices')}
-            className={`py-3 px-4 text-sm font-medium border-b-2 flex items-center gap-2 transition-colors ${
+            className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0 ${
               tab === 'devices'
                 ? 'border-[#8ab4f8] text-[#8ab4f8]'
                 : 'border-transparent text-[#9aa0a6] hover:text-white'
             }`}
           >
-            <Mic className="w-4 h-4" /> Audio & Video
+            <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Audio & Video
           </button>
           <button
             onClick={() => setTab('diagnostics')}
-            className={`py-3 px-4 text-sm font-medium border-b-2 flex items-center gap-2 transition-colors ${
+            className={`py-2.5 sm:py-3 px-3 sm:px-4 text-xs sm:text-sm font-medium border-b-2 flex items-center gap-1.5 sm:gap-2 transition-colors whitespace-nowrap shrink-0 ${
               tab === 'diagnostics'
                 ? 'border-[#8ab4f8] text-[#8ab4f8]'
                 : 'border-transparent text-[#9aa0a6] hover:text-white'
             }`}
           >
-            <Activity className="w-4 h-4" /> Network Stats
+            <Activity className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Network Stats
           </button>
         </div>
 
         {/* Tab Contents */}
-        <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+        <div className="p-4 sm:p-6 space-y-4 sm:space-y-6 flex-1 overflow-y-auto">
           {tab === 'bandwidth' && (
             <div className="space-y-4">
               <div className="p-4 bg-[#282a2d] border border-[#3c4043] rounded-xl">
