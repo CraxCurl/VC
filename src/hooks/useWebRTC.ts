@@ -83,7 +83,7 @@ export function useWebRTC({
     timestamp: Date.now(),
   });
 
-  // Dedicated Audio Element Ref for flawless remote audio playback
+  // Dedicated Audio Element Ref for background remote audio
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Initialize hidden background audio element on mount
@@ -118,7 +118,7 @@ export function useWebRTC({
   // Keep local stream ref synchronized
   useEffect(() => {
     localStreamRef.current = localStream;
-    // If an incoming call was received before stream was ready, answer it now
+    // If an incoming call arrived before stream was ready, answer it now
     if (localStream && pendingIncomingCallRef.current) {
       const call = pendingIncomingCallRef.current;
       pendingIncomingCallRef.current = null;
@@ -198,7 +198,7 @@ export function useWebRTC({
           try {
             stream = await navigator.mediaDevices.getUserMedia({
               audio: true,
-              video: { facingMode: 'user', width: { ideal: 480 }, height: { ideal: 360 } },
+              video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
             });
           } catch (videoErr) {
             console.warn('Video acquisition failed, falling back to voice only:', videoErr);
@@ -249,9 +249,10 @@ export function useWebRTC({
         }
       };
 
-      call.on('stream', handleStream);
+      call.on('stream', (rStream) => {
+        handleStream(rStream);
+      });
 
-      // Handle stream track additions dynamically
       if (call.peerConnection) {
         call.peerConnection.ontrack = (event) => {
           if (event.streams && event.streams[0]) {
@@ -286,7 +287,7 @@ export function useWebRTC({
         setRemotePeerId(conn.peer);
         broadcastLocalState();
 
-        // Send handshake
+        // Send greeting
         conn.send({
           type: 'chat',
           payload: {
@@ -298,16 +299,6 @@ export function useWebRTC({
             isSelf: false,
           },
         });
-
-        // Trigger media call if not yet established
-        if (peerRef.current && localStreamRef.current && (!callRef.current || !callRef.current.open)) {
-          try {
-            const mediaCall = peerRef.current.call(conn.peer, localStreamRef.current);
-            setupMediaCall(mediaCall);
-          } catch (err) {
-            console.warn('Call on data open attempt:', err);
-          }
-        }
       });
 
       conn.on('data', (data: any) => {
@@ -350,7 +341,7 @@ export function useWebRTC({
         console.warn('Data connection error:', err);
       });
     },
-    [userName, broadcastLocalState, onReactionReceived, onRemoteLeft, setupMediaCall]
+    [userName, broadcastLocalState, onReactionReceived, onRemoteLeft]
   );
 
   // Initialize WebRTC & Deterministic 1-on-1 Room Peer Matching
@@ -378,7 +369,7 @@ export function useWebRTC({
         },
       };
 
-      const startPeerInSlot = (mySlot: string, targetSlot: string) => {
+      const startPeerInSlot = (mySlot: string, targetSlot: string, isInitiator: boolean) => {
         if (!isSubscribed) return;
 
         const peer = new Peer(mySlot, peerConfig);
@@ -390,12 +381,11 @@ export function useWebRTC({
           setPeerId(id);
           setIsConnecting(false);
 
-          // Initiate handshake connect to the other slot
           const tryConnectTarget = () => {
             if (!isSubscribed || !peerRef.current || peerRef.current.destroyed) return;
             const currentStream = localStreamRef.current || stream;
 
-            // Connect Data
+            // Connect Data Channel
             if (!dataConnRef.current || !dataConnRef.current.open) {
               try {
                 const dataConn = peer.connect(targetSlot, { reliable: true });
@@ -403,8 +393,8 @@ export function useWebRTC({
               } catch (e) {}
             }
 
-            // Connect Media Call
-            if (currentStream && (!callRef.current || !callRef.current.open)) {
+            // Only initiator (Guest/Slot B) initiates media call to avoid dual-call glare
+            if (isInitiator && currentStream && (!callRef.current || !callRef.current.open)) {
               try {
                 const mediaCall = peer.call(targetSlot, currentStream);
                 setupMediaCall(mediaCall);
@@ -412,15 +402,15 @@ export function useWebRTC({
             }
           };
 
-          // Try immediately
+          // Try connection immediately
           tryConnectTarget();
 
-          // And heartbeat retry until connected
+          // And heartbeat retry until media/data connected
           heartbeatInterval = setInterval(() => {
             if (!callRef.current?.open || !dataConnRef.current?.open) {
               tryConnectTarget();
             }
-          }, 2500);
+          }, 3000);
         });
 
         peer.on('connection', (conn) => {
@@ -435,7 +425,6 @@ export function useWebRTC({
             incomingCall.answer(currentStream);
             setupMediaCall(incomingCall);
           } else {
-            // Queue pending call
             pendingIncomingCallRef.current = incomingCall;
           }
         });
@@ -447,22 +436,23 @@ export function useWebRTC({
             // My slot is taken! Switch to the other slot
             peer.destroy();
             if (mySlot === slotA) {
-              startPeerInSlot(slotB, slotA);
+              // Slot A was taken, so I am Slot B (Initiator)
+              startPeerInSlot(slotB, slotA, true);
             } else {
-              // Both standard slots taken, generate fallback guest slot
+              // Both slots taken, fallback guest
               const fallbackSlot = `meet-${cleanRoomCode}-g-${Math.random().toString(36).substring(2, 6)}`;
-              startPeerInSlot(fallbackSlot, slotA);
+              startPeerInSlot(fallbackSlot, slotA, true);
             }
           } else if (err.type === 'peer-unavailable') {
-            // Target peer not online yet, will retry via heartbeat
+            // Target peer not online yet, waiting for friend
           } else {
             console.warn('PeerJS notice:', err?.type || err);
           }
         });
       };
 
-      // Start by attempting slot A
-      startPeerInSlot(slotA, slotB);
+      // Slot A starts as Receiver (isInitiator = false)
+      startPeerInSlot(slotA, slotB, false);
     }
 
     initPeerSession();

@@ -56,7 +56,6 @@ export function getMediaConstraints(
         noiseSuppression: true,
         autoGainControl: true,
         channelCount: 1, // Mono audio cuts voice data consumption in half
-        sampleRate: 24000, // Voice optimized sample rate
       }
     : {
         echoCancellation: true,
@@ -111,15 +110,9 @@ export async function applyBandwidthConstraints(
           parameters.encodings[0].active = false;
         } else {
           parameters.encodings[0].active = true;
+          // Set clean max bitrate without fractional scale degradation
           parameters.encodings[0].maxBitrate = config.videoBitrateKbps * 1000;
           parameters.encodings[0].maxFramerate = config.frameRate;
-          parameters.degradationPreference = 'maintain-framerate'; // Smooth video even when bandwidth fluctuates
-
-          if (preset === 'eco') {
-            parameters.encodings[0].scaleResolutionDownBy = 2;
-          } else {
-            parameters.encodings[0].scaleResolutionDownBy = 1;
-          }
         }
         await sender.setParameters(parameters);
       }

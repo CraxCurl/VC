@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MicOff } from 'lucide-react';
 
 interface VideoTileProps {
@@ -25,26 +25,49 @@ export function VideoTile({
   className = '',
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [hasActiveVideoTrack, setHasActiveVideoTrack] = useState(false);
 
-  // Bind stream to video element whenever stream changes or component mounts
+  // Monitor tracks and stream changes
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+
+    const checkVideoTrack = () => {
+      if (!stream) {
+        setHasActiveVideoTrack(false);
+        return;
+      }
+      const videoTracks = stream.getVideoTracks();
+      const hasEnabledTrack = videoTracks.some((t) => t.enabled && t.readyState === 'live');
+      setHasActiveVideoTrack(hasEnabledTrack || videoTracks.length > 0);
+    };
+
+    checkVideoTrack();
 
     if (stream) {
-      if (video.srcObject !== stream) {
+      if (video && video.srcObject !== stream) {
         video.srcObject = stream;
+        video.play().catch((err) => {
+          console.log('Video autoplay deferred:', err?.message || err);
+        });
       }
-      video.play().catch((err) => {
-        // Autoplay may be deferred by browser policy until interaction
-        console.log('Video play deferred or prevented:', err?.message || err);
-      });
-    } else {
+
+      stream.onaddtrack = checkVideoTrack;
+      stream.onremovetrack = checkVideoTrack;
+    } else if (video) {
       video.srcObject = null;
     }
+
+    const interval = setInterval(checkVideoTrack, 1000);
+    return () => {
+      clearInterval(interval);
+      if (stream) {
+        stream.onaddtrack = null;
+        stream.onremovetrack = null;
+      }
+    };
   }, [stream]);
 
-  // Callback ref ensures stream is attached as soon as the DOM node renders
+  // Callback ref guarantees stream binding when DOM element renders
   const setVideoRef = (element: HTMLVideoElement | null) => {
     videoRef.current = element;
     if (element && stream) {
@@ -55,7 +78,7 @@ export function VideoTile({
     }
   };
 
-  const showVideo = !isVideoMuted && stream && stream.getVideoTracks().some((t) => t.enabled);
+  const showVideo = !isVideoMuted && Boolean(stream) && (hasActiveVideoTrack || Boolean(stream?.getVideoTracks()?.length));
   const initials = (userName || 'User').trim().charAt(0).toUpperCase() || 'U';
 
   return (
@@ -71,17 +94,17 @@ export function VideoTile({
         ref={setVideoRef}
         autoPlay
         playsInline
-        muted={isSelf} // Always mute self to avoid acoustic echo feedback loop
+        muted={isSelf} // Self is always muted to avoid acoustic feedback
         className={`w-full h-full ${
           objectFit === 'contain' ? 'object-contain' : 'object-cover'
         } ${isSelf ? '-scale-x-100' : ''} transition-opacity duration-300 ${
-          showVideo ? 'opacity-100' : 'opacity-0'
+          showVideo ? 'opacity-100 z-10' : 'opacity-0 z-0 pointer-events-none'
         }`}
       />
 
       {/* Camera Off Avatar Placeholder */}
       {!showVideo && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1e1f20] p-4 text-center select-none animate-in fade-in duration-200">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1e1f20] p-4 text-center select-none animate-in fade-in duration-200 z-0">
           <div className="w-16 h-16 sm:w-24 sm:h-24 rounded-full bg-gradient-to-tr from-[#303134] to-[#3c4043] border border-[#5f6368] flex items-center justify-center text-2xl sm:text-4xl font-bold text-[#8ab4f8] shadow-lg">
             {initials}
           </div>
@@ -93,7 +116,7 @@ export function VideoTile({
       )}
 
       {/* Name and Mic Status Badge */}
-      <div className="absolute bottom-2.5 left-2.5 sm:bottom-4 sm:left-4 z-10 bg-black/60 backdrop-blur-md px-2.5 py-1 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-medium text-white flex items-center gap-1.5 sm:gap-2 max-w-[85%] border border-white/10 shadow-md">
+      <div className="absolute bottom-2.5 left-2.5 sm:bottom-4 sm:left-4 z-20 bg-black/60 backdrop-blur-md px-2.5 py-1 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-medium text-white flex items-center gap-1.5 sm:gap-2 max-w-[85%] border border-white/10 shadow-md">
         <span className="truncate">
           {userName} {isSelf && '(You)'}
         </span>
