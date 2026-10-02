@@ -16,6 +16,7 @@ import {
   Shield,
   Copy,
   Check,
+  Radio,
 } from 'lucide-react';
 
 interface LobbyProps {
@@ -30,6 +31,7 @@ interface LobbyProps {
   onOpenSettings: () => void;
   qualityPreset: QualityPreset;
   onQualityChange: (preset: QualityPreset) => void;
+  onSelectEsp32Mode?: () => void;
 }
 
 export function Lobby({
@@ -38,6 +40,7 @@ export function Lobby({
   onOpenSettings,
   qualityPreset,
   onQualityChange,
+  onSelectEsp32Mode,
 }: LobbyProps) {
   const [userName, setUserName] = useState('');
   const [roomIdInput, setRoomIdInput] = useState(initialRoomId);
@@ -149,6 +152,16 @@ export function Lobby({
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
+          {onSelectEsp32Mode && (
+            <button
+              onClick={onSelectEsp32Mode}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1e293b] border border-[#3b82f6]/40 text-xs font-semibold text-[#60a5fa] hover:bg-[#2563eb] hover:text-white transition-all shadow-md shadow-blue-500/10 cursor-pointer"
+            >
+              <Radio className="w-3.5 h-3.5 text-[#00e5ff] animate-pulse" />
+              <span>ESP32 Drone Mode</span>
+            </button>
+          )}
+
           {/* Low Bandwidth quick toggle badge */}
           <button
             onClick={onOpenSettings}
@@ -309,6 +322,31 @@ export function Lobby({
               >
                 <span>Join Call Now</span>
                 <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* ESP32 Drone Mode Quick Switch Card */}
+          {onSelectEsp32Mode && (
+            <div className="p-3.5 rounded-xl bg-gradient-to-r from-[#0d1b2a] to-[#112233] border border-[#1e3a5f] flex items-center justify-between shadow-md">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-[#00e5ff]/20 flex items-center justify-center text-[#00e5ff]">
+                  <Radio className="w-4 h-4 animate-pulse" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                    ESP32 Drone Bridge Mode
+                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#00e5ff]/20 text-[#00e5ff] font-mono">NEW</span>
+                  </div>
+                  <div className="text-[11px] text-gray-400">Control drone via Bluetooth &amp; ESP32 UDP</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onSelectEsp32Mode}
+                className="px-3 py-1.5 rounded-lg bg-[#00e5ff] hover:bg-[#33ebff] text-black font-bold text-xs transition cursor-pointer shrink-0 shadow-md shadow-[#00e5ff]/20"
+              >
+                Launch Cockpit
               </button>
             </div>
           )}

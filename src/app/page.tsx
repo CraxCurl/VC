@@ -6,10 +6,15 @@ import { QualityPreset } from '@/types/meeting';
 import { Lobby } from '@/components/Lobby';
 import { MeetingRoom } from '@/components/MeetingRoom';
 import { SettingsModal } from '@/components/SettingsModal';
+import { DroneController } from '@/components/DroneController';
 
 function MeetAppContent() {
   const searchParams = useSearchParams();
   const roomParam = searchParams.get('room') || '';
+  const modeParam = searchParams.get('mode');
+
+  // Mode Selection: 'normal' (Video Meeting) vs 'esp32' (ESP32 Drone Bridge)
+  const [appMode, setAppMode] = useState<'normal' | 'esp32'>('normal');
 
   const [inMeeting, setInMeeting] = useState(false);
   const [meetingConfig, setMeetingConfig] = useState<{
@@ -30,12 +35,15 @@ function MeetAppContent() {
   const [selectedAudioDevice, setSelectedAudioDevice] = useState('');
   const [selectedVideoDevice, setSelectedVideoDevice] = useState('');
 
-  // Update room ID if URL query param changes
+  // Update room ID or mode if URL query param changes
   useEffect(() => {
     if (roomParam) {
       setMeetingConfig((prev) => ({ ...prev, roomId: roomParam }));
     }
-  }, [roomParam]);
+    if (modeParam === 'esp32') {
+      setAppMode('esp32');
+    }
+  }, [roomParam, modeParam]);
 
   const handleJoinRoom = (config: {
     roomId: string;
@@ -56,6 +64,11 @@ function MeetAppContent() {
     setMeetingConfig((prev) => ({ ...prev, qualityPreset: preset }));
   };
 
+  // If ESP32 Drone mode is active
+  if (appMode === 'esp32') {
+    return <DroneController onSwitchMode={() => setAppMode('normal')} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#131314]">
       {!inMeeting ? (
@@ -66,6 +79,7 @@ function MeetAppContent() {
             onOpenSettings={() => setIsSettingsOpen(true)}
             qualityPreset={meetingConfig.qualityPreset}
             onQualityChange={handleQualityChange}
+            onSelectEsp32Mode={() => setAppMode('esp32')}
           />
           <SettingsModal
             isOpen={isSettingsOpen}
